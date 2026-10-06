@@ -12,6 +12,7 @@ export function useOrgData(orgId) {
   const [quotes, setQuotes] = useState([])
   const [conversations, setConversations] = useState([])
   const [messages, setMessages] = useState([])
+  const [templates, setTemplates] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -35,13 +36,18 @@ export function useOrgData(orgId) {
     if (!error) setMessages(data || [])
   }, [orgId])
 
+  const loadTemplates = useCallback(async () => {
+    const { data, error } = await supabase.from('templates').select('*').eq('org_id', orgId).order('created_at', { ascending: false })
+    if (!error) setTemplates(data || [])
+  }, [orgId])
+
   useEffect(() => {
     let cancelled = false
 
     async function loadAll() {
       setLoading(true)
       setError('')
-      const results = await Promise.allSettled([loadContacts(), loadQuotes(), loadConversations(), loadMessages()])
+      const results = await Promise.allSettled([loadContacts(), loadQuotes(), loadConversations(), loadMessages(), loadTemplates()])
       if (cancelled) return
       const firstRejection = results.find(r => r.status === 'rejected')
       if (firstRejection) setError(firstRejection.reason?.message || 'Failed to load org data')
@@ -71,13 +77,19 @@ export function useOrgData(orgId) {
       })
       .subscribe()
 
+    const templatesChannel = supabase
+      .channel(`org-data-templates-${orgId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'templates', filter: `org_id=eq.${orgId}` }, () => loadTemplates())
+      .subscribe()
+
     return () => {
       cancelled = true
       supabase.removeChannel(contactsChannel)
       supabase.removeChannel(quotesChannel)
       supabase.removeChannel(messagesChannel)
+      supabase.removeChannel(templatesChannel)
     }
-  }, [orgId, loadContacts, loadQuotes, loadConversations, loadMessages])
+  }, [orgId, loadContacts, loadQuotes, loadConversations, loadMessages, loadTemplates])
 
   const messagesByPhone = useMemo(() => {
     const map = {}
@@ -94,6 +106,7 @@ export function useOrgData(orgId) {
     conversations,
     messagesByPhone,
     messagesCount: messages.length,
+    templates, setTemplates,
     loading, error,
   }
 }

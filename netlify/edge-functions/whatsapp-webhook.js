@@ -17,6 +17,7 @@ import {
   getConversationState, saveConversationState, logMessage as logMessageSb,
   upsertContact, updateContact, getContactByPhone, updateMessageStatusByWamid,
   flagNeedsReview, clearNeedsReview, setConversationStatus, createQuote, uploadMedia,
+  getActiveFlow,
 } from './lib/supabase.js'
 import { callGraphSend, fetchMediaBytes } from './lib/graph.js'
 import { detectIntent } from './lib/intent.js'
@@ -97,11 +98,20 @@ export default async (request) => {
     console.log(`[whatsapp-webhook] no organization found for phone_number_id=${phoneNumberIdFromPayload} — dropping`)
     return new Response('OK', { status: 200 })
   }
+  // A custom Flow Builder flow, when active, takes over routing entirely
+  // for this org (see handleIncoming's ctx.flow guard and runFlowStep
+  // below) — null here for any org without one, which is every org until
+  // they explicitly build and publish one (see migrations/004_flows.sql).
+  const activeFlow = await getActiveFlow(org.id).catch(err => {
+    console.log(`[whatsapp-webhook] getActiveFlow error: ${err.message}`)
+    return null
+  })
   const ctx = {
     orgId: org.id,
     phoneNumberId: phoneNumberIdFromPayload,
     accessToken: org.whatsapp_access_token,
     config: { ...DEFAULT_BOT_CONFIG, ...(org.bot_config || {}) },
+    flow: activeFlow,
   }
 
   // Delivery/read status callbacks (sent/delivered/read/failed) land in
@@ -216,6 +226,12 @@ async function tryRouteByIntent(ctx, from, intent, bg, name, text) {
 
 // ── Main routing ────────────────────────────────────────────────────────────
 async function handleIncoming(ctx, { from, text, buttonId, listId, name, state, bg, intent }) {
+  // A custom flow fully replaces everything below for this org — decline/
+  // followup-button vocab, restart words, and the hardcoded menu shortcuts
+  // are all part of the quote-flow-specific UX, not generic bot behavior.
+  // A flow author wires their own equivalents as steps instead.
+  if (ctx.flow) return runFlowStep(ctx, { from, text, buttonId, listId, name, state, bg })
+
   if (buttonId && DECLINE_BUTTON_TEXTS.has(text.trim().toLowerCase())) {
     await sendText(ctx, from, DECLINE_REPLY, bg)
     bg.push(setConversationStatus(ctx.orgId, from, 'resolved').catch(err =>
@@ -502,6 +518,117 @@ async function submitQuote(ctx, phone, data) {
     await updateContact(ctx.orgId, phone, contactUpdate)
   } catch (err) {
     console.log(`[whatsapp-webhook] submitQuote error: ${err.message}`)
+  }
+}
+
+// ── Custom flow engine (Flow Builder) ───────────────────────────────────
+// Interprets an org's published_steps (see migrations/004_flows.sql) —
+// walks forward auto-running non-interactive steps (message,
+// save_to_contact) until it hits one that needs a reply (buttons, list,
+// question), sends that, and persists conversation_state.step as
+// "flow:<stepId>" so the next inbound message picks up from there. This
+// never runs for an org without an active flow — see ctx.flow in the main
+// handler above.
+async function runFlowStep(ctx, { from, text, buttonId, listId, name, state, bg }) {
+  if (state.step === 'human') {
+    console.log(`[whatsapp-webhook] human takeover active for ${from} — flow standing down`)
+    return
+  }
+
+  const steps = ctx.flow
+  const byId = new Map(steps.map(s => [s.id, s]))
+  const data = state.data || {}
+  let current
+
+  if (state.step && state.step.startsWith('flow:') && state.step !== 'flow:__done__') {
+    const pending = byId.get(state.step.slice('flow:'.length))
+    const resolved = pending ? getNextFlowStep(pending, { text, buttonId, listId, byId, data }) : steps[0]
+    current = resolved === REPEAT ? pending : resolved
+  } else {
+    // 'new' (first-ever message), 'flow:__done__' (flow already finished —
+    // any further message restarts it), or a stale value left over from
+    // before this org had a flow active all land here: start from the top.
+    if (state.step === 'new') {
+      bg.push(upsertContact({ orgId: ctx.orgId, phone: from, name, source: 'whatsapp_inbound' }).catch(err =>
+        console.log(`[whatsapp-webhook] upsertContact error: ${err.message}`)))
+    }
+    current = steps[0]
+  }
+
+  const MAX_STEPS = 25 // guards an authoring mistake creating a cycle with no interactive step
+  for (let i = 0; i < MAX_STEPS && current; i++) {
+    if (current.type === 'message') {
+      await sendText(ctx, from, current.text, bg)
+      current = byId.get(current.next) || null
+      continue
+    }
+    if (current.type === 'save_to_contact') {
+      await applySaveToContact(ctx, from, current, data, bg)
+      current = byId.get(current.next) || null
+      continue
+    }
+    if (current.type === 'buttons') {
+      await sendButtons(ctx, from, current.text, current.buttons.map(b => ({ id: b.id, title: b.title })), bg)
+      return setState(ctx, from, { step: `flow:${current.id}`, data })
+    }
+    if (current.type === 'list') {
+      await sendList(ctx, from, current.text, current.buttonLabel || 'Select',
+        current.rows.map(r => ({ id: r.id, title: r.title })), bg)
+      return setState(ctx, from, { step: `flow:${current.id}`, data })
+    }
+    if (current.type === 'question') {
+      await sendText(ctx, from, current.text, bg)
+      return setState(ctx, from, { step: `flow:${current.id}`, data })
+    }
+    if (current.type === 'human_handoff') {
+      if (current.message) await sendText(ctx, from, current.message, bg)
+      return setState(ctx, from, { step: 'human', data }) // exact existing standdown convention
+    }
+    if (current.type === 'end') {
+      if (current.message) await sendText(ctx, from, current.message, bg)
+      return setState(ctx, from, { step: 'flow:__done__', data })
+    }
+    console.log(`[whatsapp-webhook] unknown flow step type "${current.type}" — stopping`)
+    return
+  }
+  await setState(ctx, from, { step: 'flow:__done__', data }) // ran off the end / hit MAX_STEPS
+}
+
+const REPEAT = Symbol('repeat')
+
+// Resolves which branch an incoming reply took from a pending interactive
+// step. Returns REPEAT (re-send the same prompt unchanged) when nothing
+// matches, rather than guessing a default branch.
+function getNextFlowStep(pending, { text, buttonId, listId, byId, data }) {
+  if (pending.type === 'buttons') {
+    const chosen = pending.buttons.find(b => b.id === buttonId) ||
+      pending.buttons.find(b => b.title.trim().toLowerCase() === (text || '').trim().toLowerCase())
+    return chosen ? (byId.get(chosen.next) || null) : REPEAT
+  }
+  if (pending.type === 'list') {
+    const chosen = pending.rows.find(r => r.id === listId)
+    return chosen ? (byId.get(chosen.next) || null) : REPEAT
+  }
+  if (pending.type === 'question') {
+    data.vars = data.vars || {}
+    data.vars[pending.variable] = (text || '').trim()
+    return byId.get(pending.next) || null
+  }
+  return null
+}
+
+// mappings' `column` must stay in lockstep with what updateContact (above)
+// actually accepts: name, company, email, product_interest, city, status,
+// notes — FlowBuilderPanel.jsx's dropdown is the other half of this contract.
+async function applySaveToContact(ctx, from, step, data, bg) {
+  const fields = {}
+  for (const { variable, column } of step.mappings || []) {
+    const value = data.vars?.[variable]
+    if (value !== undefined) fields[column] = value
+  }
+  if (Object.keys(fields).length) {
+    bg.push(updateContact(ctx.orgId, from, fields).catch(err =>
+      console.log(`[whatsapp-webhook] flow save_to_contact error: ${err.message}`)))
   }
 }
 

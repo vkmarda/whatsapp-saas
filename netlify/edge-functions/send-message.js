@@ -7,17 +7,13 @@
 // Supabase Auth first, then checked against `memberships` — both with the
 // service role, same as whatsapp-webhook.js — before anything is sent.
 
-import { logMessage } from './lib/supabase.js'
+import { requireOrgMember, getOrgCredentials, logMessage } from './lib/supabase.js'
 import { callGraphSend } from './lib/graph.js'
 
 export default async (request) => {
   if (request.method !== 'POST') {
     return json({ error: 'Method not allowed' }, 405)
   }
-
-  const authHeader = request.headers.get('authorization') || ''
-  const jwt = authHeader.replace(/^Bearer\s+/i, '')
-  if (!jwt) return json({ error: 'Missing Authorization header' }, 401)
 
   let body
   try {
@@ -31,24 +27,11 @@ export default async (request) => {
     return json({ error: 'orgId, to, and text are required' }, 400)
   }
 
-  const supabaseUrl = Netlify.env.get('SUPABASE_URL')
-  const serviceKey = Netlify.env.get('SUPABASE_SERVICE_ROLE_KEY')
+  const auth = await requireOrgMember(request, orgId)
+  if (auth.error) return json({ error: auth.error }, auth.status)
 
-  // Validates the caller's own session token against Supabase Auth — this is
-  // what actually proves "this is a real signed-in user", not just any string.
-  const userRes = await fetch(`${supabaseUrl}/auth/v1/user`, {
-    headers: { Authorization: `Bearer ${jwt}`, apikey: serviceKey },
-  })
-  if (!userRes.ok) return json({ error: 'Invalid or expired session' }, 401)
-  const user = await userRes.json()
-
-  const membership = await sb(supabaseUrl, serviceKey,
-    `memberships?user_id=eq.${encodeURIComponent(user.id)}&org_id=eq.${encodeURIComponent(orgId)}&select=role&limit=1`)
-  if (!membership?.[0]) return json({ error: 'Not a member of this organization' }, 403)
-
-  const org = await sb(supabaseUrl, serviceKey,
-    `organizations?id=eq.${encodeURIComponent(orgId)}&select=whatsapp_access_token,whatsapp_phone_number_id&limit=1`)
-  const { whatsapp_access_token: accessToken, whatsapp_phone_number_id: phoneNumberId } = org?.[0] || {}
+  const org = await getOrgCredentials(orgId)
+  const { whatsapp_access_token: accessToken, whatsapp_phone_number_id: phoneNumberId } = org || {}
   if (!accessToken || !phoneNumberId) return json({ error: 'This organization has no WhatsApp number connected' }, 409)
 
   const result = await callGraphSend(accessToken, phoneNumberId, {
@@ -71,14 +54,6 @@ export default async (request) => {
 
 export const config = {
   path: '/send-message',
-}
-
-async function sb(supabaseUrl, serviceKey, path) {
-  const res = await fetch(`${supabaseUrl}/rest/v1/${path}`, {
-    headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` },
-  })
-  if (!res.ok) throw new Error(`Supabase GET ${path} -> ${res.status}: ${await res.text().catch(() => '')}`)
-  return res.json()
 }
 
 function json(data, status = 200) {

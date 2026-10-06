@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import {
   LayoutDashboard, Inbox as InboxIcon, Users, Megaphone,
-  ClipboardList, Receipt, BarChart3, LogOut,
+  ClipboardList, Receipt, BarChart3, LogOut, Workflow, FileText,
 } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider.jsx'
 import { useActiveOrg } from '../auth/ActiveOrgProvider.jsx'
@@ -10,6 +10,10 @@ import DashboardPanel from './DashboardPanel.jsx'
 import InboxPanel from './InboxPanel.jsx'
 import ContactsPanel from './ContactsPanel.jsx'
 import QuotesPanel from './QuotesPanel.jsx'
+import FlowBuilderPanel from './FlowBuilderPanel.jsx'
+import BroadcastPanel from './BroadcastPanel.jsx'
+import CampaignsPanel from './CampaignsPanel.jsx'
+import TemplatesPanel from './TemplatesPanel.jsx'
 
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -17,8 +21,10 @@ const NAV_ITEMS = [
   { id: 'leads', label: 'Leads', icon: ClipboardList },
   { id: 'quotes', label: 'Quotes', icon: Receipt },
   { id: 'contacts', label: 'Contacts', icon: Users },
+  { id: 'flow-builder', label: 'Flow Builder', icon: Workflow },
   { id: 'broadcast', label: 'Broadcast', icon: Megaphone },
   { id: 'campaigns', label: 'Campaigns', icon: BarChart3 },
+  { id: 'templates', label: 'Templates', icon: FileText },
 ]
 
 // The sidebar/content frame every tenant's admin screens mount into.
@@ -90,11 +96,15 @@ export default function DashboardShell({ memberships }) {
           <ContactsPanel contacts={orgData.contacts} setContacts={orgData.setContacts} scope="all" />
         ) : view === 'quotes' ? (
           <QuotesPanel quotes={orgData.quotes} />
-        ) : (
-          <div className="app-placeholder-panel">
-            <p>{activeLabel} needs approved WhatsApp message templates before it can send anything — not built yet.</p>
-          </div>
-        )}
+        ) : view === 'flow-builder' ? (
+          <FlowBuilderPanel orgId={activeOrgId} />
+        ) : view === 'broadcast' ? (
+          <BroadcastPanel orgId={activeOrgId} templates={orgData.templates} contacts={orgData.contacts} />
+        ) : view === 'campaigns' ? (
+          <CampaignsPanel orgId={activeOrgId} templates={orgData.templates} contacts={orgData.contacts} />
+        ) : view === 'templates' ? (
+          <TemplatesPanel orgId={activeOrgId} templates={orgData.templates} />
+        ) : null}
       </div>
     </div>
   )

@@ -27,6 +27,47 @@ async function sb(path, { method = 'GET', body, headers = {} } = {}) {
   return text ? JSON.parse(text) : null
 }
 
+// ── Auth ─────────────────────────────────────────────────────────────────
+// Verifies a caller's own Supabase session JWT (not the service role)
+// against Supabase Auth, then checks they actually belong to the org
+// they're claiming to act on — the one check every edge function that acts
+// on behalf of a signed-in browser session needs (send-message.js,
+// broadcast.js) before it's safe to reach for that org's WhatsApp token.
+export async function requireOrgMember(request, orgId) {
+  const authHeader = request.headers.get('authorization') || ''
+  const jwt = authHeader.replace(/^Bearer\s+/i, '')
+  if (!jwt) return { error: 'Missing Authorization header', status: 401 }
+
+  const supabaseUrl = Netlify.env.get('SUPABASE_URL')
+  const serviceKey = Netlify.env.get('SUPABASE_SERVICE_ROLE_KEY')
+
+  const userRes = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    headers: { Authorization: `Bearer ${jwt}`, apikey: serviceKey },
+  })
+  if (!userRes.ok) return { error: 'Invalid or expired session', status: 401 }
+  const user = await userRes.json()
+
+  const membership = await sb(`memberships?user_id=eq.${encodeURIComponent(user.id)}&org_id=eq.${encodeURIComponent(orgId)}&select=role&limit=1`)
+  if (!membership?.[0]) return { error: 'Not a member of this organization', status: 403 }
+
+  return { user, role: membership[0].role }
+}
+
+// Same org-credential lookup send-message.js needed inline — now shared
+// with broadcast.js too.
+export async function getOrgCredentials(orgId) {
+  const rows = await sb(`organizations?id=eq.${encodeURIComponent(orgId)}&select=whatsapp_access_token,whatsapp_business_account_id,whatsapp_phone_number_id&limit=1`)
+  return rows?.[0] || null
+}
+
+export async function updateCampaignRecipient(id, { status, wamid, error, sentAt }) {
+  const body = { status }
+  if (wamid !== undefined) body.wamid = wamid
+  if (error !== undefined) body.error = error
+  if (sentAt !== undefined) body.sent_at = sentAt
+  await sb(`campaign_recipients?id=eq.${encodeURIComponent(id)}`, { method: 'PATCH', body, headers: { Prefer: 'return=minimal' } })
+}
+
 export function normalizePhone(raw) {
   const digits = String(raw || '').replace(/\D/g, '')
   if (digits.length === 10) return `91${digits}`
@@ -100,6 +141,18 @@ export async function setConversationStatus(orgId, phone, status) {
     body: { org_id: orgId, phone, conversation_status: status },
     headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
   })
+}
+
+// ── Flows (Flow Builder) ────────────────────────────────────────────────
+// Only published_steps/is_active matter to the webhook — draft_steps is
+// editor-only state the frontend reads/writes directly via RLS, never
+// through this file. Returning null for anything invalid/empty (not just
+// "no row") means a bad publish can't break an org's number — the webhook
+// treats it identically to "no flow configured".
+export async function getActiveFlow(orgId) {
+  const rows = await sb(`flows?org_id=eq.${encodeURIComponent(orgId)}&is_active=eq.true&select=published_steps&limit=1`)
+  const steps = rows?.[0]?.published_steps
+  return Array.isArray(steps) && steps.length ? steps : null
 }
 
 // ── Media storage (images) ──────────────────────────────────────────────
