@@ -120,7 +120,9 @@ async function handleSync(orgId, org) {
       variable_count: countVariables(bodyComponent?.text),
       body_preview: bodyComponent?.text || null,
       status: statusMap[t.status] || 'pending',
-      rejected_reason: t.rejected_reason || null,
+      // Meta returns the literal string "NONE" for approved templates,
+      // not null or an absent field — normalize it.
+      rejected_reason: (t.rejected_reason && t.rejected_reason !== 'NONE') ? t.rejected_reason : null,
     })
   }
 

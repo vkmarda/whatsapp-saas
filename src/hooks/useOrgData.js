@@ -65,14 +65,23 @@ export function useOrgData(orgId) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'quotes', filter: `org_id=eq.${orgId}` }, () => loadQuotes())
       .subscribe()
 
-    // A new message both extends its thread's cache (appended directly,
-    // cheap) and changes that phone's latest-message preview in the
-    // conversations view (re-fetched, since `conversations` is a view and
-    // can't be patched locally the way a plain row-append can).
+    // A new message extends its thread's cache (appended directly, cheap)
+    // and changes that phone's latest-message preview in the conversations
+    // view (re-fetched, since `conversations` is a view and can't be
+    // patched locally the way a plain row-append can). An UPDATE — a status
+    // webhook flipping sent/delivered/read/failed on an *existing* row, or
+    // logIncomingMessage finishing a media download after the row was
+    // already inserted — has to patch that row in place, not append a
+    // duplicate; without this branch the tick-mark/media UI would only ever
+    // reflect whatever the row looked like at the instant it was inserted.
     const messagesChannel = supabase
       .channel(`org-data-messages-${orgId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `org_id=eq.${orgId}` }, payload => {
         setMessages(prev => [...prev, payload.new])
+        loadConversations()
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `org_id=eq.${orgId}` }, payload => {
+        setMessages(prev => prev.map(m => m.id === payload.new.id ? payload.new : m))
         loadConversations()
       })
       .subscribe()

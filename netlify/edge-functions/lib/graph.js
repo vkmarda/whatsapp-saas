@@ -64,3 +64,40 @@ export function buildTemplatePayload(to, templateName, languageCode, variableVal
     template: { name: templateName, language: { code: languageCode }, components },
   }
 }
+
+// Uploads outbound media bytes to Meta, returns the media id to reference in
+// a subsequent /messages payload. Mirrors fetchMediaBytes's two-step
+// resolve-then-fetch shape in reverse (upload-then-reference).
+export async function uploadMediaToGraph(accessToken, phoneNumberId, blob, contentType, filename) {
+  if (!accessToken || !phoneNumberId) throw new Error('missing accessToken or phoneNumberId')
+  const form = new FormData()
+  form.append('messaging_product', 'whatsapp')
+  form.append('type', contentType)
+  form.append('file', blob, filename || 'upload')
+  const res = await fetch(`${GRAPH_URL}/${phoneNumberId}/media`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}` }, // no Content-Type — fetch sets the multipart boundary itself
+    body: form,
+  })
+  const bodyText = await res.text()
+  if (!res.ok) throw new Error(`media upload failed: ${res.status} ${bodyText}`)
+  let mediaId = null
+  try {
+    mediaId = JSON.parse(bodyText)?.id || null
+  } catch {
+    // fall through — handled by the !mediaId check below
+  }
+  if (!mediaId) throw new Error(`media upload returned no id: ${bodyText}`)
+  return mediaId
+}
+
+// Covers image/audio/video/document outbound sends. `context` is Meta's own
+// field name for reply-threading — kept literal here to match their shape.
+export function buildMediaPayload(type, to, mediaId, { caption, filename, replyToWamid } = {}) {
+  const mediaObj = { id: mediaId }
+  if (caption && (type === 'image' || type === 'video' || type === 'document')) mediaObj.caption = caption
+  if (filename && type === 'document') mediaObj.filename = filename
+  const payload = { messaging_product: 'whatsapp', to, type, [type]: mediaObj }
+  if (replyToWamid) payload.context = { message_id: replyToWamid }
+  return payload
+}

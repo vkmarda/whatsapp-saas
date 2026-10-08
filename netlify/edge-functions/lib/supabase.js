@@ -183,7 +183,7 @@ export async function uploadMedia(bytes, contentType) {
 }
 
 // ── Messages ─────────────────────────────────────────────────────────────
-export async function logMessage({ orgId, phone, direction, message, phoneNumberId, name, wamid, intent, mediaUrl, mediaType }) {
+export async function logMessage({ orgId, phone, direction, message, phoneNumberId, name, wamid, intent, mediaUrl, mediaType, replyToWamid, reactionToWamid }) {
   await sb('messages', {
     method: 'POST',
     body: {
@@ -197,6 +197,8 @@ export async function logMessage({ orgId, phone, direction, message, phoneNumber
       intent: intent || null,
       media_url: mediaUrl || null,
       media_type: mediaType || null,
+      reply_to_wamid: replyToWamid || null,
+      reaction_to_wamid: reactionToWamid || null,
     },
     headers: { Prefer: 'return=minimal' },
   })

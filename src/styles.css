@@ -358,6 +358,62 @@ button, input, select {
   background: var(--bg);
 }
 
+.template-guidelines {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  font-size: 0.85rem;
+}
+
+.template-guidelines strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.template-guidelines ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-muted);
+}
+
+.template-guidelines code {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.82em;
+}
+
+.template-warnings {
+  margin: 0;
+  padding: 10px 14px;
+  background: #fdf0d9;
+  border-radius: 8px;
+  color: #92620a;
+  font-size: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.template-detail {
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.template-detail p {
+  margin: 0;
+}
+
 /* ── Flow Builder ─────────────────────────────────────────────────────── */
 
 .flow-builder-layout {
@@ -757,10 +813,20 @@ button, input, select {
 }
 
 .thread-bubble {
+  position: relative;
   max-width: 70%;
   padding: 8px 12px;
   border-radius: 12px;
   font-size: 0.9rem;
+  transition: box-shadow 0.3s, border-color 0.3s;
+}
+
+.thread-bubble-jumped {
+  box-shadow: 0 0 0 3px rgba(31, 138, 76, 0.25);
+}
+
+.thread-bubble:hover .thread-bubble-reply-btn {
+  opacity: 1;
 }
 
 .thread-bubble.in {
@@ -779,6 +845,137 @@ button, input, select {
   opacity: 0.7;
   margin-top: 4px;
   font-variant-numeric: tabular-nums;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tick {
+  font-size: 0.75rem;
+  font-style: normal;
+}
+
+.tick-sent, .tick-delivered {
+  color: inherit;
+  opacity: 0.8;
+}
+
+.tick-read {
+  color: #4fc3f7;
+  opacity: 1;
+}
+
+.tick-failed {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.thread-bubble-media {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.thread-media-image, .thread-media-video {
+  max-width: 100%;
+  border-radius: 8px;
+  display: block;
+}
+
+.thread-media-audio {
+  width: 100%;
+  max-width: 260px;
+}
+
+.thread-media-document {
+  display: inline-block;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.06);
+  color: inherit;
+  text-decoration: none;
+  font-size: 0.85rem;
+}
+
+.thread-reaction-badge {
+  position: absolute;
+  bottom: -10px;
+  right: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 6px;
+  font-size: 0.78rem;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.thread-reply-quote {
+  border-left: 3px solid var(--accent);
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 4px;
+  padding: 4px 8px;
+  margin-bottom: 6px;
+  font-size: 0.8rem;
+  opacity: 0.85;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.thread-bubble-reply-btn {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  background: rgba(255, 255, 255, 0.6);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: inherit;
+  padding: 1px 4px;
+  line-height: 1;
+}
+
+.thread-reply-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+
+.thread-attach-btn, .thread-mic-btn {
+  background: none;
+  border: none;
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.thread-attach-btn:hover, .thread-mic-btn:hover:not(:disabled) {
+  background: var(--bg);
+}
+
+.thread-attach-btn:disabled, .thread-mic-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.thread-mic-btn.recording {
+  color: var(--danger);
+  animation: thread-mic-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes thread-mic-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 .thread-reply {

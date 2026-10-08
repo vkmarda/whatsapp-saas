@@ -22,6 +22,7 @@ import {
 import { callGraphSend, fetchMediaBytes } from './lib/graph.js'
 import { detectIntent } from './lib/intent.js'
 import { detectCity } from './lib/cities.js'
+import { classifyMediaType } from './lib/media.js'
 
 // Applied wherever a tenant hasn't set bot_config yet, or only set some of
 // it — merged in as fallbacks, not a requirement to configure everything
@@ -138,7 +139,7 @@ export default async (request) => {
     return new Response('OK', { status: 200 }) // neither a message nor a status update
   }
 
-  const { from, text, buttonId, listId, name, mediaId, mediaMimeType, isReaction } = incoming
+  const { from, text, buttonId, listId, name, mediaId, mediaMimeType, isReaction, replyToWamid, reactionToWamid } = incoming
   console.log(`[whatsapp-webhook] org=${ctx.orgId} from ${from} (${name}): text="${text}" buttonId="${buttonId}" listId="${listId}"`)
 
   // Only classify genuine free text — a button/list tap's "text" is just the
@@ -147,15 +148,16 @@ export default async (request) => {
 
   // A reaction is logged for context but never routed through the bot — no
   // one wants a 👍 to reopen their conversation or re-send the main menu.
+  // reactionToWamid links it back to the message it reacted to.
   if (isReaction) {
-    await logIncomingMessage(ctx, from, text, name, intent, mediaId, mediaMimeType)
+    await logIncomingMessage(ctx, from, text, name, intent, mediaId, mediaMimeType, replyToWamid, reactionToWamid)
     return new Response('OK', { status: 200 })
   }
 
   // Background work that shouldn't block message sends — collected here and
   // all awaited together before we return, so nothing is silently dropped
   // even though it doesn't block the user-facing path.
-  const bg = [logIncomingMessage(ctx, from, text, name, intent, mediaId, mediaMimeType)]
+  const bg = [logIncomingMessage(ctx, from, text, name, intent, mediaId, mediaMimeType, replyToWamid, reactionToWamid)]
   const statePromise = getConversationState(ctx.orgId, from)
 
   try {
@@ -645,6 +647,10 @@ function extractIncoming(body) {
   let listId = ''
   let mediaId = ''
   let mediaMimeType = ''
+  // context/reaction can appear on any inbound message type, not just
+  // specific ones — read unconditionally rather than inside a type branch.
+  const replyToWamid = msg.context?.id || ''
+  const reactionToWamid = msg.reaction?.message_id || ''
 
   if (msg.type === 'text') {
     text = msg.text?.body || ''
@@ -652,6 +658,17 @@ function extractIncoming(body) {
     text = msg.image?.caption || ''
     mediaId = msg.image?.id || ''
     mediaMimeType = msg.image?.mime_type || ''
+  } else if (msg.type === 'audio') {
+    mediaId = msg.audio?.id || ''
+    mediaMimeType = msg.audio?.mime_type || ''
+  } else if (msg.type === 'video') {
+    text = msg.video?.caption || ''
+    mediaId = msg.video?.id || ''
+    mediaMimeType = msg.video?.mime_type || ''
+  } else if (msg.type === 'document') {
+    text = msg.document?.caption || ''
+    mediaId = msg.document?.id || ''
+    mediaMimeType = msg.document?.mime_type || ''
   } else if (msg.type === 'interactive') {
     if (msg.interactive?.type === 'button_reply') {
       buttonId = msg.interactive.button_reply.id
@@ -669,7 +686,10 @@ function extractIncoming(body) {
     text = `[${msg.type || 'unsupported message'}]`
   }
 
-  return { from, text, buttonId, listId, name, mediaId, mediaMimeType, isReaction: msg.type === 'reaction' }
+  return {
+    from, text, buttonId, listId, name, mediaId, mediaMimeType,
+    isReaction: msg.type === 'reaction', replyToWamid, reactionToWamid,
+  }
 }
 
 // ── Send helpers ─────────────────────────────────────────────────────────
@@ -752,24 +772,29 @@ function sendDocument(ctx, to, link, filename, caption, bg) {
   }, bg)
 }
 
-async function logMessage(ctx, phone, direction, message, name, wamid, intent, mediaUrl, mediaType) {
+async function logMessage(ctx, phone, direction, message, name, wamid, intent, mediaUrl, mediaType, replyToWamid, reactionToWamid) {
   try {
-    await logMessageSb({ orgId: ctx.orgId, phone, direction, message, phoneNumberId: ctx.phoneNumberId, name, wamid, intent, mediaUrl, mediaType })
+    await logMessageSb({ orgId: ctx.orgId, phone, direction, message, phoneNumberId: ctx.phoneNumberId, name, wamid, intent, mediaUrl, mediaType, replyToWamid, reactionToWamid })
   } catch (err) {
     console.log(`[whatsapp-webhook] logMessage error: ${err.message}`)
   }
 }
 
-async function logIncomingMessage(ctx, phone, text, name, intent, mediaId, mediaMimeType) {
+const MEDIA_PLACEHOLDER = { image: '📷 Photo', audio: '🎤 Voice/audio message', video: '🎬 Video', document: '📎 Document' }
+
+async function logIncomingMessage(ctx, phone, text, name, intent, mediaId, mediaMimeType, replyToWamid, reactionToWamid) {
   let mediaUrl = null
+  let mediaType = null
   if (mediaId) {
     try {
       const { bytes, contentType } = await fetchMediaBytes(ctx.accessToken, mediaId)
-      mediaUrl = await uploadMedia(bytes, contentType || mediaMimeType)
+      const effectiveType = contentType || mediaMimeType
+      mediaUrl = await uploadMedia(bytes, effectiveType)
+      mediaType = classifyMediaType(effectiveType)
     } catch (err) {
       console.log(`[whatsapp-webhook] media download/upload error: ${err.message}`)
     }
   }
-  const message = text || (mediaUrl ? '📷 Photo' : '')
-  await logMessage(ctx, phone, 'in', message, name, undefined, intent, mediaUrl, mediaUrl ? 'image' : null)
+  const message = text || (mediaType ? MEDIA_PLACEHOLDER[mediaType] : '')
+  await logMessage(ctx, phone, 'in', message, name, undefined, intent, mediaUrl, mediaType, replyToWamid, reactionToWamid)
 }

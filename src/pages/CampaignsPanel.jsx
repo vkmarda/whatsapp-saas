@@ -59,7 +59,7 @@ export default function CampaignsPanel({ orgId, templates, contacts }) {
       )}
 
       {campaigns.length === 0 ? (
-        <p className="panel-muted">No campaigns yet.</p>
+        <p className="panel-muted">No campaigns yet — click "+ New campaign" above, or send a quick one-off from Broadcast (it'll show up here too).</p>
       ) : (
         <div className="table-scroll">
           <table className="data-table">
